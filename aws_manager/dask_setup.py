@@ -1,3 +1,4 @@
+import threading
 import time
 
 import boto3
@@ -33,17 +34,9 @@ class Brain:
             KeyName=self.key_pair,
             SecurityGroups=[self.security_group])
         instance_id = instances[0].instance_id
-        time.sleep(5)
-        while True:
-            instances = ec2.instances.filter(
-                Filters=[{'Name': 'instance-state-name', 'Values': ['running']}])
-            instances = list(instances)
-            a = instances[0]
-            if a.state["Name"] != "running":
-                time.sleep(1)
-            else:
-                time.sleep(60)
-                break
+        print("Created {}...".format(instance_id))
+        print("Sleeping for 2 mins...")
+        time.sleep(120)
         return instance_id
 
     def _run_ssh(self, instance_id, command):
@@ -59,28 +52,36 @@ class Brain:
 
                 client.connect(hostname=instance.public_ip_address, username="ubuntu", pkey=key)
 
-                stdin, stdout, stderr = client.exec_command(command)
+                stdin, stdout, stderr = client.exec_command(
+                    "sudo apt-get update -y && sudo apt-get install python3-pip -y && sudo pip3 install dask distributed bokeh")
                 print(stdout.read().decode('utf-8'))
-
-                client.close()
+                print("Running SSH on {} - {}".format(instance_id, command))
+                threading.Thread(target=client.exec_command, args=([command])).start()
+                time.sleep(2)
                 return instance.public_ip_address
 
     def main(self):
-        sch_ip = brain.setup_scheduler()
-        brain.setup_worker(sch_ip)
+        sch_ip = self.setup_scheduler()
+        # sch_ip = "54.166.246.77"
+        worker_url = self.setup_worker(sch_ip)
+        url = "http://{}:8787".format(sch_ip)
+        print("Your Dask Scheduler is at {}".format(url))
+        print(worker_url)
+        return url
 
     def setup_scheduler(self, ):
         target_id = self._create_ec2()
-        command = "sudo apt-get update -y && sudo apt-get install python3-pip -y && sudo python3 -m pip install dask distributed &&"
-        command += "dask-scheduler"
+        # command = "sudo apt-get update -y && sudo apt-get install python3-pip -y && sudo python3 -m pip install dask distributed bokeh && "
+        command = "nohup dask-scheduler &"
         ip = self._run_ssh(instance_id=target_id, command=command)
         print(ip)
         return ip
 
     def setup_worker(self, scheduler_ip):
         target_id = self._create_ec2()
-        command = "sudo apt-get update -y && sudo apt-get install python3-pip -y && sudo python3 -m pip install dask distributed &&"
-        command += "dask-worker tcp://{}:8786".format(scheduler_ip)
+        # command = "sudo apt-get update -y && sudo apt-get install python3-pip -y && sudo python3 -m pip install dask distributed && "
+        # command = "nohup dask-worker tcp://{}:8786 &".format(scheduler_ip)
+        command = " (nohup dask-worker tcp://{}:8786 > /dev/null )".format(scheduler_ip)
         ip = self._run_ssh(instance_id=target_id, command=command)
         return ip
 
